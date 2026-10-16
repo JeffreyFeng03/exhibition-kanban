@@ -101,6 +101,8 @@ let filterExhibitions = new Set();
 let allTasks = [];
 let currentUser = '';
 let cloudMode = false;
+let syncMode = 'local';   // 'internal' | 'supabase' | 'local'
+let serverEdits = {};     // internal-server shared overrides
 
 /* ===== IDENTITY ===== */
 function getUserIdentity() { return localStorage.getItem('exhibition_kanban_user') || ''; }
@@ -188,11 +190,29 @@ async function fetchAllTasks() {
   catch(e){ console.error(e); return null; }
 }
 async function updateTask(taskId, updates) {
-  if (!supabase) return false;
-  try { updates.updated_by = currentUser; updates.updated_at = new Date().toISOString();
-    const { error } = await supabase.from('tasks').update(updates).eq('task_id', taskId);
-    if (error){console.error(error);return false;} return true; }
-  catch(e){ console.error(e); return false; }
+  updates.updated_by = currentUser;
+  updates.updated_at = new Date().toISOString();
+  if (syncMode === 'internal') {
+    const cur = serverEdits[taskId] || {};
+    if (updates.completed !== undefined) cur.completed = updates.completed;
+    if (updates.note !== undefined) cur.note = updates.note;
+    if (updates.task_date !== undefined) cur.task_date = updates.task_date;
+    cur.updated_by = updates.updated_by;
+    cur.updated_at = updates.updated_at;
+    serverEdits[taskId] = cur;
+    return await saveInternalEdit(taskId, cur);
+  }
+  if (syncMode === 'supabase' && supabase) {
+    try { const { error } = await supabase.from('tasks').update(updates).eq('task_id', taskId); if (error){console.error(error);return false;} return true; }
+    catch(e){ console.error(e); return false; }
+  }
+  // local fallback: persist to localStorage
+  try {
+    const le = JSON.parse(localStorage.getItem('exhibition_kanban_edits') || '{}');
+    le[taskId] = Object.assign(le[taskId] || {}, updates);
+    localStorage.setItem('exhibition_kanban_edits', JSON.stringify(le));
+    return true;
+  } catch(e){ return false; }
 }
 
 function mapDbTasksToUI(dbTasks) {
@@ -210,6 +230,36 @@ function mapDbTasksToUI(dbTasks) {
       isShow: dt.is_show, isEnd: dt.is_end, isDaily: dt.is_daily, showStart: dt.show_start, showEnd: dt.show_end
     };
   });
+}
+
+function mapOverridesToUI(edits) {
+  return buildDefaultTasks().map(dt => {
+    const ov = edits[dt.task_id] || {};
+    return {
+      ...dt, id: dt.task_id, exIdx: dt.ex_idx, exName: dt.ex_name,
+      exColor: exhibitions[dt.ex_idx]?.color || '#999',
+      exVenue: exhibitions[dt.ex_idx]?.v || '', exType: exhibitions[dt.ex_idx]?.type || '',
+      milestone: dt.milestone, tasks: dt.tasks_desc, resp: dt.resp, scope: dt.scope,
+      date: ov.task_date || dt.task_date, originalDate: dt.task_date,
+      completed: !!ov.completed, note: ov.note || '',
+      updatedBy: ov.updated_by || '', updatedAt: ov.updated_at || null,
+      isShow: dt.is_show, isEnd: dt.is_end, isDaily: dt.is_daily, showStart: dt.show_start, showEnd: dt.show_end
+    };
+  });
+}
+
+async function loadInternalEdits() {
+  try {
+    const r = await fetch('/api/edits', { cache: 'no-store' });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) { return null; }
+}
+async function saveInternalEdit(taskId, override) {
+  try {
+    const r = await fetch('/api/edits', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task_id: taskId, override }) });
+    return r.ok;
+  } catch (e) { return false; }
 }
 
 /* ===== FILTER ===== */
@@ -333,7 +383,10 @@ function selectDate(ds){ const t=tasksForDate(ds); if(!t.length)return; const in
 async function toggleTask(taskId){
   const task=allTasks.find(t=>t.id===taskId); if(!task)return;
   task.completed=!task.completed;
-  if(cloudMode){ setSyncStatus('💾 保存中...'); const ok=await updateTask(taskId,{completed:task.completed}); if(!ok){task.completed=!task.completed;setSyncStatus('⚠️ 保存失敗');return;} setSyncStatus('☁️ 已同步'); }
+  setSyncStatus('💾 保存中...');
+  const ok=await updateTask(taskId,{completed:task.completed});
+  if(!ok){ task.completed=!task.completed; setSyncStatus('⚠️ 保存失敗'); render(); return; }
+  setSyncStatus(syncMode==='internal'?'🏢 內網已同步': syncMode==='supabase'?'☁️ 已同步':'💾 已存本地');
   render();
 }
 function toggleLegendFilter(id){ if(filterExhibitions.has(id))filterExhibitions.delete(id); else filterExhibitions.add(id); render(); }
@@ -381,14 +434,20 @@ async function saveTaskEdit(){
   const newNote=document.getElementById('panelNote').value;
   const newCompleted=document.getElementById('panelCompleted').checked;
   const updates={note:newNote, completed:newCompleted}; if(newDate)updates.task_date=newDate;
-  if(cloudMode){ setSyncStatus('💾 保存中...'); const ok=await updateTask(selectedTaskId,updates); if(!ok){setSyncStatus('⚠️ 保存失敗');return;} setSyncStatus('☁️ 已同步'); }
+  setSyncStatus('💾 保存中...');
+  const ok=await updateTask(selectedTaskId,updates);
+  if(!ok){ setSyncStatus('⚠️ 保存失敗'); return; }
+  setSyncStatus(syncMode==='internal'?'🏢 內網已同步': syncMode==='supabase'?'☁️ 已同步':'💾 已存本地');
   task.note=newNote; task.completed=newCompleted; if(newDate)task.date=newDate; task.updatedBy=currentUser; task.updatedAt=new Date().toISOString();
   closePanel(); render();
 }
 async function resetTaskEdit(){
   if(!selectedTaskId)return;
   const task=allTasks.find(t=>t.id===selectedTaskId); if(!task)return;
-  if(cloudMode){ setSyncStatus('💾 重置中...'); const ok=await updateTask(selectedTaskId,{task_date:task.originalDate,note:'',completed:false}); if(!ok){setSyncStatus('⚠️ 重置失敗');return;} setSyncStatus('☁️ 已同步'); }
+  setSyncStatus('💾 重置中...');
+  const ok=await updateTask(selectedTaskId,{task_date:task.originalDate,note:'',completed:false,reset:true});
+  if(!ok){ setSyncStatus('⚠️ 重置失敗'); return; }
+  setSyncStatus(syncMode==='internal'?'🏢 內網已同步': syncMode==='supabase'?'☁️ 已同步':'💾 已存本地');
   task.date=task.originalDate; task.note=''; task.completed=false; task.updatedBy=currentUser; task.updatedAt=new Date().toISOString();
   closePanel(); render();
 }
@@ -401,16 +460,28 @@ function setSyncStatus(t){ document.getElementById('syncStatus').textContent=t; 
 function render(){ filterExhibition=document.getElementById('filterExhibition').value; renderCalendar(); renderStats(); renderLegend(); }
 
 async function initApp(){
-  showLoading('正在連接雲端數據庫...');
-  if(supabase){
-    const seeded=await seedDatabase();
-    if(seeded){ cloudMode=true; setSyncStatus('☁️ 已連接雲端');
-      const db=await fetchAllTasks();
-      if(db){ allTasks=mapDbTasksToUI(db); } else { allTasks=mapDbTasksToUI(null); cloudMode=false; setSyncStatus('雲端讀取失敗，使用本地模式'); }
-    } else { allTasks=mapDbTasksToUI(null); setSyncStatus('⚠️ 無法連接雲端'); }
-  } else { allTasks=mapDbTasksToUI(null); setSyncStatus('⚠️ 離線模式'); }
+  showLoading('正在連接數據...');
+  // 1) internal same-origin server (best inside corporate firewall)
+  const internal = await loadInternalEdits();
+  if (internal !== null) {
+    syncMode = 'internal'; cloudMode = true; serverEdits = internal;
+    setSyncStatus('🏢 內網同步');
+    allTasks = mapOverridesToUI(serverEdits);
+  }
+  // 2) supabase cloud
+  else if (supabase) {
+    const seeded = await seedDatabase();
+    if (seeded) { syncMode='supabase'; cloudMode=true; setSyncStatus('☁️ 雲端同步');
+      const db = await fetchAllTasks();
+      if (db) allTasks = mapDbTasksToUI(db);
+      else { allTasks = mapOverridesToUI({}); syncMode='local'; cloudMode=false; setSyncStatus('本地模式'); }
+    } else { syncMode='local'; allTasks = mapOverridesToUI(loadLocalEdits()); setSyncStatus('⚠️ 離線・本地'); }
+  }
+  // 3) local
+  else { syncMode='local'; allTasks = mapOverridesToUI(loadLocalEdits()); setSyncStatus('⚠️ 離線・本地'); }
   hideLoading(); renderFilterDropdown(); render();
 }
+function loadLocalEdits(){ try { return JSON.parse(localStorage.getItem('exhibition_kanban_edits')||'{}'); } catch(e){ return {}; } }
 
 /* ===== EVENT WIRING (no inline handlers) ===== */
 document.addEventListener('click', (e) => {

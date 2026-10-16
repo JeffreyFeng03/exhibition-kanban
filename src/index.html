@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>2026 展會工作看板</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<div class="identity-modal" id="identityModal">
+  <div class="identity-box">
+    <div class="avatar"></div>
+    <h2>歡迎使用展會看板</h2>
+    <p>請輸入你的名字，讓大家知道是誰在更新任務</p>
+    <input type="text" id="userNameInput" placeholder="你的名字" maxlength="20" autofocus>
+    <button data-action="saveIdentity">進入看板</button>
+  </div>
+</div>
+
+<div class="loading-overlay hidden" id="loadingOverlay">
+  <div class="spinner"></div>
+  <div class="loading-text" id="loadingText">同步數據中...</div>
+</div>
+
+<div class="header">
+  <h1>📋 <span>2026</span> 展會工作看板</h1>
+  <div style="display:flex;align-items:center;gap:16px">
+    <div class="user-badge" id="userBadge" data-action="changeIdentity">👤 <span id="userBadgeName">未設定</span></div>
+    <div class="nav-controls">
+      <button data-action="prev">◀ 上月</button>
+      <div class="month-title" id="monthTitle"></div>
+      <button data-action="next">下月 ▶</button>
+      <button class="btn-today" data-action="today">今天</button>
+    </div>
+  </div>
+</div>
+
+<div class="toolbar">
+  <select id="filterExhibition"><option value="all">全部展會</option></select>
+  <select id="filterStatus">
+    <option value="all">全部狀態</option>
+    <option value="incomplete">未完成</option>
+    <option value="completed">已完成</option>
+  </select>
+  <label><input type="checkbox" id="showCompleted" checked> 顯示已完成</label>
+  <div style="flex:1"></div>
+  <div style="font-size:12px;color:var(--text2)" id="taskSummary"></div>
+  <div style="font-size:11px;color:var(--text2);padding:4px 8px;background:#F0F4FF;border-radius:4px" id="syncStatus">已連接</div>
+</div>
+
+<div class="stats-bar" id="statsBar"></div>
+
+<div class="main-container">
+  <div class="calendar-container">
+    <div class="calendar-grid" id="calendarGrid"></div>
+  </div>
+</div>
+
+<div class="legend" id="legendSection">
+  <div class="legend-title">展會圖例（點擊篩選）</div>
+  <div class="legend-items" id="legendItems"></div>
+</div>
+
+<div class="panel-overlay" id="panelOverlay" data-action="closePanel"></div>
+<div class="detail-panel" id="detailPanel">
+  <div class="panel-header">
+    <h3 id="panelTitle">任務詳情</h3>
+    <button class="panel-close" data-action="closePanel">×</button>
+  </div>
+  <div class="panel-body" id="panelBody"></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
